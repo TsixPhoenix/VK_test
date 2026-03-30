@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
@@ -72,36 +71,54 @@ class UserService:
 
     async def lock_user(self, payload: LockUserRequest) -> tuple[User, str]:
         """Lock first available user and return it with decrypted password."""
-        now_utc = datetime.now(UTC)
-        lock_until = now_utc + timedelta(seconds=LOCK_TTL_SECONDS)
         user: User | None = None
+        plaintext_password: str | None = None
 
         try:
             async with self.session.begin():
                 user = await self.repository.lock_first_available(
-                    now_utc=now_utc,
-                    lock_until=lock_until,
+                    lock_ttl_seconds=LOCK_TTL_SECONDS,
                     project_id=payload.project_id,
                     env=payload.env,
                     domain=payload.domain,
                 )
                 if user is None:
                     raise ConflictError("No available users to lock for requested filters.")
+                plaintext_password = decrypt_secret(user.password, settings=self.settings)
+                if user.locktime is None:
+                    raise ServiceError("Internal error: locktime was not assigned.")
         except SQLAlchemyError as exc:
             raise ServiceError("Could not lock user due to database error.") from exc
 
-        if user is None:
-            raise ServiceError("Internal error: user lock transaction returned no user.")
-
-        plaintext_password = decrypt_secret(user.password, settings=self.settings)
-        if user.locktime is None:
-            raise ServiceError("Internal error: locktime was not assigned.")
+        if user is None or plaintext_password is None:
+            raise ServiceError("Internal error: lock transaction returned incomplete data.")
         return user, plaintext_password
 
-    async def free_users(self) -> int:
-        """Remove locktime from all locked users."""
+    async def free_users_by_scope(
+        self,
+        *,
+        project_id: UUID | None,
+        env: UserEnv | None,
+        domain: UserDomain | None,
+        release_all: bool,
+    ) -> int:
+        """Remove locktime using explicit scope or an explicit global override."""
+        has_filters = any([project_id is not None, env is not None, domain is not None])
+        if release_all and has_filters:
+            raise ServiceError("`release_all=true` cannot be combined with context filters.")
+        if not release_all and not has_filters:
+            raise ServiceError(
+                "At least one scope filter (`project_id`, `env`, `domain`) is required. "
+                "Use `release_all=true` for a global unlock."
+            )
+
         try:
-            freed_count = await self.repository.free_all_users()
+            freed_count = await self.repository.free_users(
+                project_id=project_id,
+                env=env,
+                domain=domain,
+                release_all=release_all,
+            )
             await self.session.commit()
             return freed_count
         except SQLAlchemyError as exc:

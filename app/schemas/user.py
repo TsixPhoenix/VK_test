@@ -87,6 +87,6 @@ class LockedUserResponse(BaseModel):
 
 
 class FreeUsersResponse(BaseModel):
-    """Response payload for global unlock operation."""
+    """Response payload for lock release operation."""
 
     freed_count: int

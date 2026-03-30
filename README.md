@@ -5,7 +5,7 @@
 - создает нового пользователя ботофермы;
 - выдает список существующих пользователей;
 - блокирует первого свободного пользователя (`locktime = now + TTL`) и возвращает креды;
-- снимает блокировки со всех пользователей;
+- снимает блокировки в заданном контексте (`project_id`/`env`/`domain`) или глобально по явному подтверждению;
 - защищает бизнес-endpoint-ы через OAuth2 Password + JWT scopes;
 - отдает startup/liveness/readiness пробы.
 
@@ -40,6 +40,7 @@
 - `POSTGRES_PASSWORD` — пароль postgres-контейнера в docker-compose.
 - `DATABASE_URL` — строка подключения к PostgreSQL.
 - `BOTFARM_ENCRYPTION_KEY` — Fernet-ключ для шифрования паролей пользователей.
+- `BOTFARM_ENCRYPTION_FALLBACK_KEYS` — опциональный список старых Fernet-ключей через запятую для ротации.
 - `JWT_SECRET_KEY` — секрет подписи JWT.
 - `AUTH_PASSWORD` — пароль сервисного аккаунта OAuth2.
 
@@ -52,15 +53,28 @@
 python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
 ```
 
+Ротация ключа шифрования:
+
+1. Сгенерировать новый `BOTFARM_ENCRYPTION_KEY`.
+2. Текущий старый ключ добавить в `BOTFARM_ENCRYPTION_FALLBACK_KEYS`.
+3. После пере-шифрования/обновления всех пользовательских паролей удалить старый ключ из fallback-списка.
+
 ## Локальный запуск
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate  # Windows: .venv\\Scripts\\activate
-pip install -e ".[dev]"
+pip install -r requirements-dev.lock
+pip install -e . --no-deps
 cp .env.example .env
 alembic upgrade head
 uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+```
+
+Runtime-only профиль (например, для контейнеров) ставится из `requirements.lock`:
+
+```bash
+pip install -r requirements.lock
 ```
 
 Swaggers: `http://localhost:8000/docs`
@@ -102,16 +116,23 @@ curl "http://localhost:8000/api/v1/users?env=stage&domain=regular&limit=50&offse
 Заблокировать пользователя:
 
 ```bash
-curl -X POST "http://localhost:8000/api/v1/users/lock" \
+curl -X POST "http://localhost:8000/api/v1/users/locks" \
   -H "Authorization: Bearer <TOKEN>" \
   -H "Content-Type: application/json" \
   -d '{"env":"stage","domain":"regular"}'
 ```
 
-Снять все блокировки:
+Снять блокировки по контексту:
 
 ```bash
-curl -X POST "http://localhost:8000/api/v1/users/free" \
+curl -X DELETE "http://localhost:8000/api/v1/users/locks?project_id=11111111-1111-1111-1111-111111111111&env=stage&domain=regular" \
+  -H "Authorization: Bearer <TOKEN>"
+```
+
+Глобальное снятие блокировок (явно):
+
+```bash
+curl -X DELETE "http://localhost:8000/api/v1/users/locks?release_all=true" \
   -H "Authorization: Bearer <TOKEN>"
 ```
 
@@ -179,13 +200,15 @@ helm upgrade --install botfarm ./helm/botfarm \
 2. Создать 2 тестовых пользователей.
 3. Вызвать `lock` дважды — должны прийти разные пользователи.
 4. Третий `lock` должен вернуть `409`.
-5. Вызвать `free` и убедиться, что `freed_count >= 1`.
+5. Вызвать `DELETE /users/locks` c фильтрами и убедиться, что `freed_count >= 1`.
 6. Проверить `health/live`, `health/ready`, `health/startup`.
 
 ## Важные детали реализации
 
 - `password` пользователя хранится в БД в зашифрованном виде (Fernet).
+- ротация ключей поддерживается через `BOTFARM_ENCRYPTION_FALLBACK_KEYS` (MultiFernet).
 - `get_users` не возвращает пароль.
 - `lock_user` возвращает расшифрованный пароль только авторизованному клиенту со scope `botfarm:write`.
 - выбор пользователя для lock реализован через `SELECT ... FOR UPDATE SKIP LOCKED` на PostgreSQL.
+- TTL блокировки рассчитывается от времени БД, а не от локальных часов инстанса приложения.
 - правило уникальности: `login` уникален глобально во всей системе.

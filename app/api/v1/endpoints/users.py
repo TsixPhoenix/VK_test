@@ -83,8 +83,13 @@ async def get_users(
     )
 
 
-@router.post("/lock", response_model=LockedUserResponse, summary="Lock first available user")
-async def lock_user(
+@router.post(
+    "/locks",
+    response_model=LockedUserResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Acquire user lock",
+)
+async def acquire_user_lock(
     payload: LockUserRequest,
     service: Annotated[UserService, Depends(get_user_service)],
     _: Annotated[object, Depends(require_write_scope)],
@@ -94,11 +99,20 @@ async def lock_user(
     return _to_locked_user_response(user, plaintext_password)
 
 
-@router.post("/free", response_model=FreeUsersResponse, summary="Release all locks")
-async def free_users(
+@router.delete("/locks", response_model=FreeUsersResponse, summary="Release user locks")
+async def release_user_locks(
     service: Annotated[UserService, Depends(get_user_service)],
     _: Annotated[object, Depends(require_write_scope)],
+    project_id: Annotated[UUID | None, Query()] = None,
+    env: Annotated[UserEnv | None, Query()] = None,
+    domain: Annotated[UserDomain | None, Query()] = None,
+    release_all: Annotated[bool, Query()] = False,
 ) -> FreeUsersResponse:
-    """Clear locktime for every locked user in the system."""
-    freed_count = await service.free_users()
+    """Clear locktime for context-matched users or globally with explicit override."""
+    freed_count = await service.free_users_by_scope(
+        project_id=project_id,
+        env=env,
+        domain=domain,
+        release_all=release_all,
+    )
     return FreeUsersResponse(freed_count=freed_count)

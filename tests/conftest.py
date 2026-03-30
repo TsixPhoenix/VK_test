@@ -31,8 +31,12 @@ from app.main import create_app
 @pytest.fixture
 def test_settings(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Settings:
     """Prepare isolated settings for test process."""
-    db_path = tmp_path / "botfarm_test.db"
-    monkeypatch.setenv("DATABASE_URL", f"sqlite+aiosqlite:///{db_path.as_posix()}")
+    configured_test_db_url = os.getenv("TEST_DATABASE_URL")
+    if configured_test_db_url:
+        monkeypatch.setenv("DATABASE_URL", configured_test_db_url)
+    else:
+        db_path = tmp_path / "botfarm_test.db"
+        monkeypatch.setenv("DATABASE_URL", f"sqlite+aiosqlite:///{db_path.as_posix()}")
     monkeypatch.setenv("BOTFARM_ENCRYPTION_KEY", Fernet.generate_key().decode("utf-8"))
     monkeypatch.setenv("JWT_SECRET_KEY", "test-super-secret-key")
     monkeypatch.setenv("AUTH_PASSWORD", "test-password")
@@ -51,7 +55,7 @@ def test_settings(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Settings:
 
 @pytest_asyncio.fixture
 async def db_engine(test_settings: Settings) -> AsyncGenerator[AsyncEngine, None]:
-    """Create isolated sqlite database for tests."""
+    """Create isolated database engine and schema for tests."""
     engine = create_async_engine(test_settings.database_url, future=True)
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)

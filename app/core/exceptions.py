@@ -27,3 +27,9 @@ class UnauthorizedError(ServiceError):
     """Raised when authorization checks fail."""
 
     status_code = 401
+
+
+class InternalServiceError(ServiceError):
+    """Raised when server-side configuration or internal invariants are broken."""
+
+    status_code = 500

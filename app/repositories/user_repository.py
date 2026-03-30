@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID
 
 from sqlalchemy import func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.exceptions import InternalServiceError
 from app.models.user import User, UserDomain, UserEnv
 
 
@@ -75,14 +76,16 @@ class UserRepository:
     async def lock_first_available(
         self,
         *,
-        now_utc: datetime,
-        lock_until: datetime,
+        lock_ttl_seconds: int,
         project_id: UUID | None,
         env: UserEnv | None,
         domain: UserDomain | None,
     ) -> User | None:
-        """Lock and return first available user with row-level lock."""
-        filters: list[Any] = [or_(User.locktime.is_(None), User.locktime <= now_utc)]
+        """Lock and return first available user using database time as reference."""
+        db_now = await self._get_database_utc_now()
+        lock_until = db_now + timedelta(seconds=lock_ttl_seconds)
+
+        filters: list[Any] = [or_(User.locktime.is_(None), User.locktime <= db_now)]
         if project_id is not None:
             filters.append(User.project_id == project_id)
         if env is not None:
@@ -106,8 +109,35 @@ class UserRepository:
         await self.session.refresh(user)
         return user
 
-    async def free_all_users(self) -> int:
-        """Remove lock from all currently locked users and return affected rows."""
-        stmt = update(User).where(User.locktime.is_not(None)).values(locktime=None)
+    async def _get_database_utc_now(self) -> datetime:
+        """Return current timestamp sourced from database server clock."""
+        result = await self.session.execute(select(func.current_timestamp()))
+        db_now = result.scalar_one()
+        if not isinstance(db_now, datetime):
+            raise InternalServiceError("Database current timestamp returned invalid type.")
+        if db_now.tzinfo is None:
+            return db_now.replace(tzinfo=UTC)
+        return db_now.astimezone(UTC)
+
+    async def free_users(
+        self,
+        *,
+        project_id: UUID | None,
+        env: UserEnv | None,
+        domain: UserDomain | None,
+        release_all: bool,
+    ) -> int:
+        """Remove locks for selected users and return number of affected rows."""
+        filters: list[Any] = [User.locktime.is_not(None)]
+        if not release_all:
+            if project_id is not None:
+                filters.append(User.project_id == project_id)
+            if env is not None:
+                filters.append(User.env == env)
+            if domain is not None:
+                filters.append(User.domain == domain)
+
+        stmt = update(User).where(*filters).values(locktime=None)
         result = await self.session.execute(stmt)
-        return int(result.rowcount or 0)
+        rowcount = getattr(result, "rowcount", 0)
+        return int(rowcount or 0)

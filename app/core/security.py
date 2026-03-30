@@ -7,7 +7,7 @@ from datetime import UTC, datetime, timedelta
 from functools import lru_cache
 from typing import Any
 
-from cryptography.fernet import Fernet, InvalidToken
+from cryptography.fernet import Fernet, InvalidToken, MultiFernet
 from jose import JWTError, jwt
 
 from app.core.config import (
@@ -17,7 +17,7 @@ from app.core.config import (
     Settings,
     get_settings,
 )
-from app.core.exceptions import UnauthorizedError
+from app.core.exceptions import InternalServiceError, UnauthorizedError
 
 AUTH_SCOPES: dict[str, str] = {
     "botfarm:read": "Read botfarm users and lock state.",
@@ -25,30 +25,44 @@ AUTH_SCOPES: dict[str, str] = {
 }
 
 
-@lru_cache(maxsize=1)
-def _build_fernet(key: str) -> Fernet:
-    """Create and cache a Fernet cipher instance."""
-    try:
-        return Fernet(key.encode("utf-8"))
-    except ValueError as exc:
-        raise RuntimeError("Invalid BOTFARM_ENCRYPTION_KEY. Provide a valid Fernet key.") from exc
+@lru_cache(maxsize=32)
+def _build_fernet_chain(primary_key: str, fallback_keys: tuple[str, ...]) -> MultiFernet:
+    """Create and cache Fernet chain for key rotation support."""
+    all_keys = (primary_key, *fallback_keys)
+    fernet_instances: list[Fernet] = []
+    for key in all_keys:
+        try:
+            fernet_instances.append(Fernet(key.encode("utf-8")))
+        except ValueError as exc:
+            raise InternalServiceError(
+                "Invalid encryption key configuration. Provide valid Fernet keys."
+            ) from exc
+    return MultiFernet(fernet_instances)
 
 
 def encrypt_secret(plaintext: str, settings: Settings | None = None) -> str:
     """Encrypt plaintext value and return base64 ciphertext."""
     effective_settings = settings or get_settings()
-    cipher = _build_fernet(effective_settings.botfarm_encryption_key)
+    cipher = _build_fernet_chain(
+        effective_settings.botfarm_encryption_key,
+        tuple(effective_settings.encryption_fallback_keys),
+    )
     return cipher.encrypt(plaintext.encode("utf-8")).decode("utf-8")
 
 
 def decrypt_secret(ciphertext: str, settings: Settings | None = None) -> str:
     """Decrypt ciphertext value and return plaintext."""
     effective_settings = settings or get_settings()
-    cipher = _build_fernet(effective_settings.botfarm_encryption_key)
+    cipher = _build_fernet_chain(
+        effective_settings.botfarm_encryption_key,
+        tuple(effective_settings.encryption_fallback_keys),
+    )
     try:
         return cipher.decrypt(ciphertext.encode("utf-8")).decode("utf-8")
     except InvalidToken as exc:
-        raise UnauthorizedError("Stored user credentials cannot be decrypted.") from exc
+        raise InternalServiceError(
+            "Stored user credentials cannot be decrypted with configured encryption keys."
+        ) from exc
 
 
 def create_access_token(

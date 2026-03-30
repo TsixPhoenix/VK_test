@@ -6,9 +6,10 @@ from uuid import uuid4
 
 import pytest
 from app.core.config import Settings
-from app.core.exceptions import ConflictError
+from app.core.exceptions import ConflictError, InternalServiceError, ServiceError
 from app.schemas.user import LockUserRequest, UserCreateRequest
 from app.services.user_service import UserService
+from cryptography.fernet import Fernet
 from sqlalchemy.ext.asyncio import AsyncSession
 
 
@@ -97,9 +98,66 @@ async def test_lock_and_free_users(
     with pytest.raises(ConflictError):
         await service.lock_user(LockUserRequest())
 
-    freed_count = await service.free_users()
+    freed_count = await service.free_users_by_scope(
+        project_id=None,
+        env=None,
+        domain=None,
+        release_all=True,
+    )
     assert freed_count == 1
 
     relocked_user, relocked_password = await service.lock_user(LockUserRequest())
     assert relocked_user.id == locked_user.id
     assert relocked_password == "VeryStrong1!"
+
+
+@pytest.mark.asyncio
+async def test_free_users_requires_scope_or_explicit_override(
+    db_session: AsyncSession,
+    test_settings: Settings,
+) -> None:
+    """Service should reject unscoped unlock requests by default."""
+    service = UserService(session=db_session, settings=test_settings)
+
+    with pytest.raises(ServiceError):
+        await service.free_users_by_scope(
+            project_id=None,
+            env=None,
+            domain=None,
+            release_all=False,
+        )
+
+
+@pytest.mark.asyncio
+async def test_lock_user_rolls_back_if_decrypt_fails(
+    db_session: AsyncSession,
+    test_settings: Settings,
+) -> None:
+    """Lock must roll back if credential decryption fails after selecting a user."""
+    service = UserService(session=db_session, settings=test_settings)
+    payload = UserCreateRequest(
+        login="rollback@example.com",
+        password="VeryStrong1!",
+        project_id=uuid4(),
+        env="stage",
+        domain="regular",
+    )
+    created = await service.create_user(payload)
+    project_id = created.project_id
+
+    wrong_key_settings = test_settings.model_copy(
+        update={"botfarm_encryption_key": Fernet.generate_key().decode("utf-8")}
+    )
+    lock_service = UserService(session=db_session, settings=wrong_key_settings)
+    with pytest.raises(InternalServiceError):
+        await lock_service.lock_user(LockUserRequest(project_id=project_id))
+
+    users, _ = await service.get_users(
+        project_id=project_id,
+        env="stage",
+        domain="regular",
+        limit=10,
+        offset=0,
+    )
+    assert len(users) == 1
+    assert users[0].locktime is None

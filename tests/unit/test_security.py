@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 from app.core.config import Settings
-from app.core.exceptions import UnauthorizedError
+from app.core.exceptions import InternalServiceError, UnauthorizedError
 from app.core.security import (
     create_access_token,
     decode_access_token,
@@ -12,6 +12,7 @@ from app.core.security import (
     encrypt_secret,
     verify_auth_credentials,
 )
+from cryptography.fernet import Fernet
 
 
 def test_encrypt_decrypt_roundtrip(test_settings: Settings) -> None:
@@ -48,3 +49,25 @@ def test_verify_auth_credentials(test_settings: Settings) -> None:
     assert verify_auth_credentials("botfarm_admin", "test-password", settings=test_settings)
     assert not verify_auth_credentials("wrong", "test-password", settings=test_settings)
     assert not verify_auth_credentials("botfarm_admin", "wrong", settings=test_settings)
+
+
+def test_decrypt_invalid_ciphertext_raises_internal_error(test_settings: Settings) -> None:
+    """Decrypt failures are internal server-side errors, not auth failures."""
+    with pytest.raises(InternalServiceError):
+        decrypt_secret("broken-ciphertext", settings=test_settings)
+
+
+def test_encryption_key_rotation_with_fallback(test_settings: Settings) -> None:
+    """Fallback keys should decrypt values encrypted by previous active key."""
+    old_key = test_settings.botfarm_encryption_key
+    new_key = Fernet.generate_key().decode("utf-8")
+    old_settings = test_settings.model_copy(update={"botfarm_encryption_key": old_key})
+    rotated_settings = test_settings.model_copy(
+        update={
+            "botfarm_encryption_key": new_key,
+            "botfarm_encryption_fallback_keys": old_key,
+        }
+    )
+
+    encrypted = encrypt_secret("legacy-password", settings=old_settings)
+    assert decrypt_secret(encrypted, settings=rotated_settings) == "legacy-password"

@@ -6,13 +6,14 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends build-essential \
     && rm -rf /var/lib/apt/lists/*
 
-COPY pyproject.toml README.md ./
+COPY pyproject.toml README.md requirements.lock ./
 COPY app ./app
 COPY alembic.ini ./alembic.ini
 COPY alembic ./alembic
 
 RUN pip install --upgrade pip \
-    && pip install --prefix=/install .
+    && pip install --prefix=/install -r requirements.lock \
+    && pip install --prefix=/install --no-deps .
 
 FROM python:3.12-slim AS runtime
 
