@@ -1,0 +1,19 @@
+{{- if .Values.postgres.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "botfarm.fullname" . }}-postgres
+  labels:
+    {{- include "botfarm.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: {{ include "botfarm.name" . }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: postgres
+  ports:
+    - name: postgres
+      protocol: TCP
+      port: {{ .Values.postgres.service.port }}
+      targetPort: postgres
+{{- end }}

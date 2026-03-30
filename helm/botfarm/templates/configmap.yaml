@@ -1,0 +1,18 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "botfarm.fullname" . }}-config
+  labels:
+    {{- include "botfarm.labels" . | nindent 4 }}
+data:
+  APP_NAME: {{ .Values.env.appName | quote }}
+  APP_ENV: {{ .Values.env.appEnv | quote }}
+  APP_HOST: {{ .Values.env.appHost | quote }}
+  APP_PORT: {{ .Values.env.appPort | quote }}
+  LOG_LEVEL: {{ .Values.env.logLevel | quote }}
+  LOCK_TTL_SECONDS: {{ .Values.env.lockTtlSeconds | quote }}
+  JWT_ALGORITHM: {{ .Values.env.jwtAlgorithm | quote }}
+  JWT_ACCESS_TOKEN_EXPIRE_MINUTES: {{ .Values.env.jwtAccessTokenExpireMinutes | quote }}
+  AUTH_USERNAME: {{ .Values.env.authUsername | quote }}
+  RUN_MIGRATIONS_ON_STARTUP: {{ .Values.env.runMigrationsOnStartup | quote }}
+  READINESS_DB_TIMEOUT_SECONDS: {{ .Values.env.readinessDbTimeoutSeconds | quote }}

@@ -1,0 +1,74 @@
+replicaCount: 1
+
+image:
+  repository: botfarm-service
+  tag: latest
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+  port: 8000
+
+env:
+  appName: botfarm-service
+  appEnv: production
+  appHost: 0.0.0.0
+  appPort: "8000"
+  logLevel: INFO
+  lockTtlSeconds: "900"
+  jwtAlgorithm: HS256
+  jwtAccessTokenExpireMinutes: "30"
+  authUsername: botfarm_admin
+  runMigrationsOnStartup: "true"
+  readinessDbTimeoutSeconds: "2.0"
+
+database:
+  # If set, this URL has priority and internal postgres is ignored by the app.
+  url: ""
+
+secrets:
+  botfarmEncryptionKey: ""
+  jwtSecretKey: ""
+  authPassword: ""
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+
+probes:
+  startup:
+    initialDelaySeconds: 5
+    periodSeconds: 5
+    timeoutSeconds: 2
+    failureThreshold: 30
+  liveness:
+    initialDelaySeconds: 5
+    periodSeconds: 15
+    timeoutSeconds: 2
+    failureThreshold: 3
+  readiness:
+    initialDelaySeconds: 5
+    periodSeconds: 10
+    timeoutSeconds: 2
+    failureThreshold: 3
+
+postgres:
+  enabled: true
+  image:
+    repository: postgres
+    tag: 16-alpine
+    pullPolicy: IfNotPresent
+  auth:
+    username: botfarm
+    password: ""
+    database: botfarm
+  service:
+    port: 5432
+  persistence:
+    enabled: true
+    size: 1Gi
+    storageClassName: ""
